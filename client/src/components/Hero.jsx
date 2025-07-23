@@ -7,7 +7,7 @@ const Hero = () => {
 
   return (
     <div
-      className=" w-full flex-col items-center justify-start
+      className="w-full flex-col items-center justify-start
     px-4 sm:px-20 xl:px-32 relative inline-flex bg-[url(/gradientBackground.png)] bg-cover bg-no-repeat min-h-screen"
     >
       <div className="max-w-2xl flex flex-col items-center mt-20 text-center">
@@ -36,6 +36,7 @@ const Hero = () => {
         </div>
       </div>
 
+      {/* AI Tools Section */}
       <section className="w-full bg-white mt-30 px-4 py-12 bg-[url(/gradientBackground.png)] bg-cover bg-no-repeat min-h-screen ">
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="font-bold text-3xl sm:text-4xl mb-3">
