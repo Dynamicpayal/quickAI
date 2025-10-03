@@ -1,36 +1,21 @@
 import OpenAI from "openai";
 import sql from "../configs/db.js";
 import { clerkClient } from "@clerk/express";
+import axios from "axios";
+import { v2 as cloudinary } from "cloudinary";
 
 const AI = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: "process.env.GEMINI_API_KEY",
+  baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
 });
 
 export const generateArticle = async (req, res) => {
   try {
-    const { userId } = req.auth || {};
+    const { userId } = req.auth;
     const { prompt, length } = req.body;
-    const plan = req.plan || "free";
+    const plan = req.plan;
+    const free_usage = req.free_usage;
 
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized: userId missing",
-      });
-    }
-
-    if (!prompt || !length) {
-      return res.status(400).json({
-        success: false,
-        message: "Prompt and length are required",
-      });
-    }
-
-    // ✅ Fetch actual free usage from Clerk
-    const user = await clerkClient.users.getUser(userId);
-    const free_usage = user.privateMetadata?.free_usage ?? 0;
-
-    // Free plan limit
     if (plan !== "premium" && free_usage >= 10) {
       return res.json({
         success: false,
@@ -38,46 +23,118 @@ export const generateArticle = async (req, res) => {
       });
     }
 
-    let content = "";
+    const response = await AI.chat.completions.create({
+      model: "gemini-2.0-flash",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: length,
+    });
+    const content = response.choices[0].message.content;
 
-    try {
-      // Attempt OpenAI request
-      const response = await AI.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
-        max_tokens: Math.min(Number(length), 1000), // safe max tokens
-      });
+    await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'article')`;
 
-      // Safely get content, fallback to mock if undefined
-      content =
-        response.choices?.[0]?.message?.content?.trim() ||
-        `Mock article for: "${prompt}"`;
-    } catch (err) {
-      console.warn("OpenAI API error, returning mock content:", err.message);
-      content = `Mock article for: "${prompt}"`;
-    }
-
-    // Save content to database
-    await sql`
-      INSERT INTO creations (user_id, prompt, content, type) 
-      VALUES (${userId}, ${prompt}, ${content}, 'article')
-    `;
-
-    // Update free usage in Clerk
     if (plan !== "premium") {
       await clerkClient.users.updateUserMetadata(userId, {
         privateMetadata: {
-          ...user.privateMetadata,
           free_usage: free_usage + 1,
         },
       });
     }
 
-    // Return content
     res.json({ success: true, content });
   } catch (error) {
-    console.error("AI Controller Error:", error);
-    res.status(500).json({ success: false, message: error.message });
+    console.log(error.message);
+    res.json({ success: false, message: error.message });
+  }
+};
+
+export const generateBlogTitle = async (req, res) => {
+  try {
+    const { userId } = req.auth;
+    const { prompt } = req.body;
+    const plan = req.plan;
+    const free_usage = req.free_usage;
+
+    if (plan !== "premium" && free_usage >= 10) {
+      return res.json({
+        success: false,
+        message: "Limit reached. Upgrade to continue.",
+      });
+    }
+
+    const response = await AI.chat.completions.create({
+      model: "gemini-2.0-flash",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 100,
+    });
+    const content = response.choices[0].message.content;
+
+    await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'blog-article')`;
+
+    if (plan !== "premium") {
+      await clerkClient.users.updateUserMetadata(userId, {
+        privateMetadata: {
+          free_usage: free_usage + 1,
+        },
+      });
+    }
+
+    res.json({ success: true, content });
+  } catch (error) {
+    console.log(error.message);
+    res.json({ success: false, message: error.message });
+  }
+};
+
+export const generateImage = async (req, res) => {
+  try {
+    const { userId } = req.auth;
+    const { prompt, publish } = req.body;
+    const plan = req.plan;
+
+    if (plan !== "premium") {
+      return res.json({
+        success: false,
+        message: "This feature is only available for premium subscriptions",
+      });
+    }
+
+    const formData = new FormData();
+    formData.append("prompt", prompt);
+    const { data } = await axios.post(
+      "https://clipdrop-api.co/text-to-image/v1",
+      formData,
+      {
+        headers: { "x-api-key": process.env.CLIPDROP_API_KEY },
+        responseType: "arraybuffer",
+      }
+    );
+
+    const base64Image = `data:image/png;base64,${Buffer.from(
+      data,
+      "binary"
+    ).toString("base64")}`;
+
+    const { secure_url } = await cloudinary.uploader.upload(base64Image);
+
+    await sql`INSERT INTO creations (user_id, prompt, content, type, publish) VALUES (${userId}, ${prompt}, ${secure_url}, 'image', ${
+      publish ?? false
+    })`;
+
+    res.json({ success: true, content: secure_url });
+  } catch (error) {
+    console.log(error.message);
+    res.json({ success: false, message: error.message });
   }
 };
